@@ -9,7 +9,7 @@ import { GENRES, getGenre } from "@/lib/music/genres";
 import { audioBufferToWavBlob, renderSong } from "@/lib/music/engine/render";
 import type { Song } from "@/lib/music/types";
 import { ClipRenderer } from "@/lib/video/clip";
-import { generateSong } from "@/lib/flow";
+import { generateNeural, generateSong } from "@/lib/flow";
 import { db } from "@/lib/store/db";
 
 interface Props {
@@ -52,16 +52,28 @@ export default function SongView({ song, buffer, onReplace }: Props) {
     }
   };
 
+  const isNeural = song.engine === "neural";
+
+  const regenerate = async (newGenreId: string) => {
+    if (isNeural) {
+      return generateNeural(
+        { prompt: song.prompt, genreId: newGenreId, durationSec: Math.round(song.durationSec), engine: "browser" },
+        () => {}
+      );
+    }
+    return generateSong({
+      prompt: song.prompt,
+      genreId: newGenreId,
+      seed: (song.seed + 1 + Math.floor(Math.random() * 1e6)) >>> 0,
+      voice: song.voice,
+      instrumental: !song.voice,
+    });
+  };
+
   const makeVariation = async () => {
     setBusy("variation");
     try {
-      const { song: s2, buffer: b2 } = await generateSong({
-        prompt: song.prompt,
-        genreId: song.genreId,
-        seed: (song.seed + 1 + Math.floor(Math.random() * 1e6)) >>> 0,
-        voice: song.voice,
-        instrumental: !song.voice,
-      });
+      const { song: s2, buffer: b2 } = await regenerate(song.genreId);
       onReplace?.(s2, b2);
     } finally {
       setBusy(null);
@@ -72,12 +84,7 @@ export default function SongView({ song, buffer, onReplace }: Props) {
     if (!remixGenre) return;
     setBusy("remix");
     try {
-      const { song: s2, buffer: b2 } = await generateSong({
-        prompt: song.prompt,
-        genreId: remixGenre,
-        voice: song.voice,
-        instrumental: !song.voice,
-      });
+      const { song: s2, buffer: b2 } = await regenerate(remixGenre);
       onReplace?.(s2, b2);
     } finally {
       setBusy(null);
@@ -97,9 +104,10 @@ export default function SongView({ song, buffer, onReplace }: Props) {
         <div className="flex flex-wrap gap-2 text-xs">
           <Chip hue={hue}>{song.genreName}</Chip>
           <Chip hue={hue}>{genre.era}</Chip>
-          <Chip hue={hue}>{song.bpm} BPM</Chip>
+          {!isNeural && <Chip hue={hue}>{song.bpm} BPM</Chip>}
+          {isNeural && <Chip hue={hue}>🧠 neuronal</Chip>}
           {song.voice && <Chip hue={hue}>voix : {song.voice.name}</Chip>}
-          {!song.voice && <Chip hue={hue}>instrumental</Chip>}
+          {!song.voice && !isNeural && <Chip hue={hue}>instrumental</Chip>}
         </div>
       </div>
 
@@ -107,9 +115,11 @@ export default function SongView({ song, buffer, onReplace }: Props) {
 
       <div className="mt-5 flex flex-wrap items-center gap-2">
         <Action onClick={exportWav}>⬇ WAV</Action>
-        <Action onClick={exportStems} disabled={busy !== null}>
-          {busy === "stems" ? "Export…" : "⬇ Stems"}
-        </Action>
+        {!isNeural && (
+          <Action onClick={exportStems} disabled={busy !== null}>
+            {busy === "stems" ? "Export…" : "⬇ Stems"}
+          </Action>
+        )}
         <Action onClick={() => setClipOpen(true)} highlight hue={hue}>
           ▣ Clip vidéo
         </Action>

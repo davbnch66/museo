@@ -46,6 +46,7 @@ export const db = {
   deleteSong: async (id: string) => {
     await tx("songs", "readwrite", (s) => s.delete(id));
     await tx("media", "readwrite", (s) => s.delete(`clip:${id}`));
+    await tx("media", "readwrite", (s) => s.delete(`audio:${id}`));
   },
 
   saveVoice: (voice: StoredVoice) => tx("voices", "readwrite", (s) => s.put(voice)),

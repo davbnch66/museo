@@ -8,6 +8,8 @@ import { renderSong } from "./music/engine/render";
 import { getGenre, matchGenre, STRUCTURES } from "./music/genres";
 import { analyzePrompt } from "./music/prompt";
 import type { Song } from "./music/types";
+import { NeuralProgress, generateInBrowser, generateViaReplicate, pcmToWavBlob } from "./neural/engine";
+import { buildNeuralPrompt } from "./neural/promptBuilder";
 import { db } from "./store/db";
 
 const bufferCache = new Map<string, AudioBuffer>();
@@ -81,7 +83,75 @@ export async function generateSong(
 export async function ensureBuffer(song: Song): Promise<AudioBuffer> {
   const cached = bufferCache.get(song.id);
   if (cached) return cached;
-  const buffer = await renderSong(song);
+  let buffer: AudioBuffer;
+  if (song.audioKey) {
+    const blob = await db.getMedia(song.audioKey);
+    if (!blob) throw new Error("Audio introuvable dans la bibliothèque.");
+    const ctx = new AudioContext();
+    try {
+      buffer = await ctx.decodeAudioData(await blob.arrayBuffer());
+    } finally {
+      void ctx.close();
+    }
+  } else {
+    buffer = await renderSong(song);
+  }
   cacheBuffer(song.id, buffer);
   return buffer;
+}
+
+// ---- neural generation -------------------------------------------------------
+
+export type NeuralEngine = "browser" | "replicate";
+
+export async function generateNeural(
+  opts: { prompt: string; genreId?: string; durationSec: number; engine: NeuralEngine },
+  onProgress: (p: NeuralProgress) => void
+): Promise<{ song: Song; buffer: AudioBuffer }> {
+  const genre = opts.genreId ? getGenre(opts.genreId) : matchGenre(opts.prompt).genre;
+  const analysis = analyzePrompt(opts.prompt, genre.hue, genre.energy, Date.now() & 0xffff);
+  const bpm = analysis.bpmHint ?? Math.round((genre.bpm[0] + genre.bpm[1]) / 2);
+  const neuralPrompt = buildNeuralPrompt(genre, analysis.mood, bpm);
+
+  const { pcm, sampleRate } =
+    opts.engine === "replicate"
+      ? await generateViaReplicate(neuralPrompt, opts.durationSec, onProgress)
+      : await generateInBrowser(neuralPrompt, opts.durationSec, onProgress);
+
+  onProgress({ phase: "décodage" });
+  const buffer = new AudioBuffer({ length: pcm.length, sampleRate, numberOfChannels: 1 });
+  buffer.copyToChannel(pcm as Float32Array<ArrayBuffer>, 0);
+
+  const id = `song_n_${Date.now().toString(36)}`;
+  const audioKey = `audio:${id}`;
+  await db.saveMedia(audioKey, pcmToWavBlob(pcm, sampleRate));
+
+  const song: Song = {
+    id,
+    title: analysis.title,
+    prompt: opts.prompt,
+    createdAt: Date.now(),
+    seed: 0,
+    genreId: genre.id,
+    genreName: genre.name,
+    bpm,
+    rootMidi: 60,
+    scale: "major",
+    swing: 0,
+    stepsPerBar: 16,
+    sections: [],
+    tracks: [],
+    drums: [],
+    lyrics: [],
+    mood: analysis.mood,
+    voice: null,
+    totalSteps: 0,
+    durationSec: buffer.duration,
+    engine: "neural",
+    audioKey,
+    neuralPrompt,
+  };
+  await db.saveSong(song);
+  cacheBuffer(song.id, buffer);
+  return { song, buffer };
 }

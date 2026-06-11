@@ -102,6 +102,12 @@ export interface Song {
   voice: VoiceConfig | null;
   totalSteps: number;
   durationSec: number;
+  /** "local" (compositeur + synthèse) ou "neural" (audio généré par modèle). */
+  engine?: "local" | "neural";
+  /** Clé du blob audio en IndexedDB pour les morceaux neuronaux. */
+  audioKey?: string;
+  /** Prompt anglais envoyé au modèle neuronal. */
+  neuralPrompt?: string;
 }
 
 export const DEFAULT_VOICE: VoiceConfig = {

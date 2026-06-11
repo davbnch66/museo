@@ -4,8 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import SongView from "@/components/SongView";
 import { GENRES, matchGenre } from "@/lib/music/genres";
 import type { Song } from "@/lib/music/types";
-import { Stage, generateSong } from "@/lib/flow";
+import { NeuralEngine, Stage, generateNeural, generateSong } from "@/lib/flow";
+import type { NeuralProgress } from "@/lib/neural/engine";
 import { StoredVoice, db } from "@/lib/store/db";
+
+type EngineChoice = "neural-browser" | "replicate" | "local";
 
 const EXAMPLES = [
   "Une chanson synthwave sur une nuit en voiture sous les néons",
@@ -30,6 +33,10 @@ export default function StudioPage() {
   const [showLyrics, setShowLyrics] = useState(false);
   const [useProLyrics, setUseProLyrics] = useState(false);
   const [proAvailable, setProAvailable] = useState(false);
+  const [engine, setEngine] = useState<EngineChoice>("neural-browser");
+  const [replicateAvailable, setReplicateAvailable] = useState(false);
+  const [duration, setDuration] = useState(15);
+  const [neuralProgress, setNeuralProgress] = useState<NeuralProgress | null>(null);
   const [stage, setStage] = useState<Stage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ song: Song; buffer: AudioBuffer } | null>(null);
@@ -41,6 +48,8 @@ export default function StudioPage() {
       .then((p) => {
         setProAvailable(!!p.anthropic);
         setUseProLyrics(!!p.anthropic);
+        setReplicateAvailable(!!p.replicate);
+        if (p.replicate) setEngine("replicate");
       })
       .catch(() => {});
   }, []);
@@ -51,25 +60,41 @@ export default function StudioPage() {
     if (!prompt.trim() || stage) return;
     setError(null);
     setResult(null);
+    setNeuralProgress(null);
     try {
-      const voice =
-        voiceId === "museo-default" ? undefined : voices.find((v) => v.voiceId === voiceId) ?? undefined;
-      const out = await generateSong(
-        {
-          prompt: prompt.trim(),
-          genreId: genreId || undefined,
-          instrumental: instrumental || undefined,
-          voice,
-          customLyrics: customLyrics.trim() || null,
-          useProLyrics,
-        },
-        setStage
-      );
-      setResult(out);
+      if (engine === "local") {
+        const voice =
+          voiceId === "museo-default" ? undefined : voices.find((v) => v.voiceId === voiceId) ?? undefined;
+        const out = await generateSong(
+          {
+            prompt: prompt.trim(),
+            genreId: genreId || undefined,
+            instrumental: instrumental || undefined,
+            voice,
+            customLyrics: customLyrics.trim() || null,
+            useProLyrics,
+          },
+          setStage
+        );
+        setResult(out);
+      } else {
+        setStage("interprétation");
+        const out = await generateNeural(
+          {
+            prompt: prompt.trim(),
+            genreId: genreId || undefined,
+            durationSec: duration,
+            engine: (engine === "replicate" ? "replicate" : "browser") as NeuralEngine,
+          },
+          setNeuralProgress
+        );
+        setResult(out);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erreur de génération");
     } finally {
       setStage(null);
+      setNeuralProgress(null);
     }
   };
 
@@ -96,6 +121,19 @@ export default function StudioPage() {
 
         <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
           <label className="flex items-center gap-2">
+            <span className="text-muted">Moteur</span>
+            <select
+              value={engine}
+              onChange={(e) => setEngine(e.target.value as EngineChoice)}
+              className="rounded-lg border border-edge bg-surface2 px-2 py-1.5"
+            >
+              <option value="neural-browser">🧠 Neuronal — MusicGen dans le navigateur</option>
+              {replicateAvailable && <option value="replicate">⚡ Neuronal — Replicate (rapide, stéréo)</option>}
+              <option value="local">🎛 Synthèse locale (chant + paroles)</option>
+            </select>
+          </label>
+
+          <label className="flex items-center gap-2">
             <span className="text-muted">Style</span>
             <select
               value={genreId}
@@ -113,55 +151,81 @@ export default function StudioPage() {
             </select>
           </label>
 
-          <label className="flex items-center gap-2">
-            <span className="text-muted">Voix</span>
-            <select
-              value={instrumental ? "none" : voiceId}
-              onChange={(e) => {
-                if (e.target.value === "none") setInstrumental(true);
-                else {
-                  setInstrumental(false);
-                  setVoiceId(e.target.value);
-                }
-              }}
-              className="rounded-lg border border-edge bg-surface2 px-2 py-1.5"
-            >
-              <option value="museo-default">Lumen (voix Museo)</option>
-              {voices.map((v) => (
-                <option key={v.voiceId} value={v.voiceId}>
-                  {v.name} {v.source === "user-recording" ? "· votre voix" : "· designée"}
-                </option>
-              ))}
-              <option value="none">Instrumental</option>
-            </select>
-          </label>
+          {engine === "local" ? (
+            <>
+              <label className="flex items-center gap-2">
+                <span className="text-muted">Voix</span>
+                <select
+                  value={instrumental ? "none" : voiceId}
+                  onChange={(e) => {
+                    if (e.target.value === "none") setInstrumental(true);
+                    else {
+                      setInstrumental(false);
+                      setVoiceId(e.target.value);
+                    }
+                  }}
+                  className="rounded-lg border border-edge bg-surface2 px-2 py-1.5"
+                >
+                  <option value="museo-default">Lumen (voix Museo)</option>
+                  {voices.map((v) => (
+                    <option key={v.voiceId} value={v.voiceId}>
+                      {v.name} {v.source === "user-recording" ? "· votre voix" : "· designée"}
+                    </option>
+                  ))}
+                  <option value="none">Instrumental</option>
+                </select>
+              </label>
 
-          {proAvailable && (
-            <label className="flex cursor-pointer items-center gap-1.5 text-muted">
-              <input
-                type="checkbox"
-                checked={useProLyrics}
-                onChange={(e) => setUseProLyrics(e.target.checked)}
-              />
-              Paroles par Claude
+              {proAvailable && (
+                <label className="flex cursor-pointer items-center gap-1.5 text-muted">
+                  <input
+                    type="checkbox"
+                    checked={useProLyrics}
+                    onChange={(e) => setUseProLyrics(e.target.checked)}
+                  />
+                  Paroles par Claude
+                </label>
+              )}
+
+              <button
+                onClick={() => setShowLyrics(!showLyrics)}
+                className="text-muted underline-offset-2 hover:text-foreground hover:underline"
+              >
+                {showLyrics ? "− mes paroles" : "+ mes paroles"}
+              </button>
+            </>
+          ) : (
+            <label className="flex items-center gap-2">
+              <span className="text-muted">Durée</span>
+              <select
+                value={duration}
+                onChange={(e) => setDuration(parseInt(e.target.value))}
+                className="rounded-lg border border-edge bg-surface2 px-2 py-1.5"
+              >
+                <option value={10}>10 s</option>
+                <option value={15}>15 s</option>
+                <option value={20}>20 s</option>
+                <option value={30}>30 s</option>
+              </select>
             </label>
           )}
-
-          <button
-            onClick={() => setShowLyrics(!showLyrics)}
-            className="text-muted underline-offset-2 hover:text-foreground hover:underline"
-          >
-            {showLyrics ? "− mes paroles" : "+ mes paroles"}
-          </button>
 
           <button
             onClick={generate}
             disabled={!prompt.trim() || !!stage}
             className="ml-auto rounded-xl bg-accent px-5 py-2.5 text-sm font-bold text-black transition hover:opacity-90 disabled:opacity-40"
           >
-            {stage ? `${stage}…` : "♪ Composer"}
+            {stage ? "Génération…" : "♪ Composer"}
           </button>
         </div>
+
+        {engine === "neural-browser" && !stage && (
+          <p className="mt-2 text-[11px] leading-relaxed text-muted">
+            🧠 Le modèle MusicGen (Meta, open source) tourne dans votre navigateur : premier usage =
+            téléchargement unique d&apos;environ 650 Mo (mis en cache), puis 1 à 5 min de calcul selon votre
+            machine. Audio neuronal instrumental — pour le chant, utilisez le moteur local ou une clé Replicate.
+          </p>
+        )}
 
         {showLyrics && (
           <textarea
@@ -185,10 +249,29 @@ export default function StudioPage() {
               ))}
             </div>
             <span className="text-xs text-muted">
-              {stage === "écriture" && "Claude écrit les paroles…"}
-              {stage === "composition" && "Le musicologue compose : harmonie, mélodie, rythme…"}
-              {stage === "interprétation" && "Les instruments et la voix enregistrent le morceau…"}
+              {engine === "local" ? (
+                <>
+                  {stage === "écriture" && "Claude écrit les paroles…"}
+                  {stage === "composition" && "Le musicologue compose : harmonie, mélodie, rythme…"}
+                  {stage === "interprétation" && "Les instruments et la voix enregistrent le morceau…"}
+                </>
+              ) : neuralProgress ? (
+                <>
+                  {neuralProgress.phase === "téléchargement" &&
+                    `Téléchargement du modèle MusicGen… ${neuralProgress.pct ?? 0}% (une seule fois, ensuite en cache)`}
+                  {neuralProgress.phase === "génération" &&
+                    `Le réseau de neurones génère l'audio… ${neuralProgress.pct != null ? `${neuralProgress.pct}%` : ""} ${neuralProgress.detail ?? ""}`}
+                  {neuralProgress.phase === "décodage" && "Décodage de l'audio…"}
+                </>
+              ) : (
+                "Initialisation du moteur neuronal…"
+              )}
             </span>
+          </div>
+        )}
+        {stage && neuralProgress?.pct != null && (
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface2">
+            <div className="h-full bg-accent transition-all" style={{ width: `${neuralProgress.pct}%` }} />
           </div>
         )}
         {error && <p className="mt-3 text-xs text-red-400">{error}</p>}

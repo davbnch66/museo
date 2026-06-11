@@ -38,5 +38,13 @@ export async function POST(req: NextRequest) {
   if (prediction.status !== "succeeded") {
     return NextResponse.json({ error: `Génération échouée (${prediction.status})` }, { status: 502 });
   }
-  return NextResponse.json({ audioUrl: prediction.output });
+  // Proxy the audio back (avoids CORS on the delivery URL).
+  const url = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
+  const audio = await fetch(url);
+  if (!audio.ok) {
+    return NextResponse.json({ error: "Téléchargement de l'audio échoué." }, { status: 502 });
+  }
+  return new NextResponse(await audio.arrayBuffer(), {
+    headers: { "Content-Type": audio.headers.get("content-type") ?? "audio/mpeg" },
+  });
 }
