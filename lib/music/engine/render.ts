@@ -5,16 +5,16 @@ import { getGenre } from "../genres";
 import { midiToFreq } from "../theory";
 import type { Song, TrackRole } from "../types";
 import { makeReverbImpulse, playDrum, playNote } from "./synth";
-import { singSyllable } from "./vocals";
+import { singLine } from "./vocals";
 
 const REVERB_SEND: Record<TrackRole, number> = {
-  bass: 0.04,
-  chords: 0.22,
-  melody: 0.3,
-  pad: 0.45,
-  arp: 0.3,
-  drone: 0.35,
-  vocal: 0.32,
+  bass: 0.02,
+  chords: 0.14,
+  melody: 0.18,
+  pad: 0.28,
+  arp: 0.18,
+  drone: 0.22,
+  vocal: 0.2,
 };
 
 export function stepDuration(song: Song): number {
@@ -71,7 +71,7 @@ export async function renderSong(song: Song, opts: RenderOptions = {}): Promise<
 
   if (song.drums.length && include("drums")) {
     stems.push(await renderUnit(song, length, sampleRate, (ctx, master, reverb) => {
-      const bus = makeTrackBus(ctx, master, reverb, 0.9, 0, 0.12);
+      const bus = makeTrackBus(ctx, master, reverb, 0.9, 0, 0.07);
       for (const d of song.drums) {
         playDrum(ctx, bus, d.drum, timeOfStep(song, d.step) + 0.05, d.vel);
       }
@@ -82,17 +82,15 @@ export async function renderSong(song: Song, opts: RenderOptions = {}): Promise<
     const voice = song.voice;
     const choir = getGenre(song.genreId).vocalStyle === "choir" || getGenre(song.genreId).vocalStyle === "chant";
     stems.push(await renderUnit(song, length, sampleRate, (ctx, master, reverb) => {
-      const bus = makeTrackBus(ctx, master, reverb, 0.95, 0, REVERB_SEND.vocal);
-      let prevMidi: number | null = null;
+      const bus = makeTrackBus(ctx, master, reverb, 0.62, 0, REVERB_SEND.vocal);
       for (const sec of song.sections) {
         for (const line of sec.lyricLines) {
-          for (const syl of line.syllables) {
-            const t = timeOfStep(song, syl.step) + 0.05;
-            const dur = Math.max(0.08, syl.durSteps * stepDuration(song) * 0.92);
-            singSyllable(ctx, bus, syl, t, dur, voice, { choir, prevMidi });
-            prevMidi = syl.midi;
-          }
-          prevMidi = null; // breath between lines
+          const timed = line.syllables.map((syl) => ({
+            syl,
+            time: timeOfStep(song, syl.step) + 0.05,
+            dur: Math.max(0.08, syl.durSteps * stepDuration(song) * 0.95),
+          }));
+          singLine(ctx, bus, timed, voice, { choir });
         }
       }
     }));
@@ -139,7 +137,7 @@ async function renderUnit(
   master.gain.value = 1;
   master.connect(ctx.destination);
   const reverb = ctx.createConvolver();
-  reverb.buffer = makeReverbImpulse(ctx, song.mood.energy < 0.3 ? 3.6 : 2.2, 2.8);
+  reverb.buffer = makeReverbImpulse(ctx, song.mood.energy < 0.3 ? 2.8 : 1.7, 3.2);
   reverb.connect(master);
   schedule(ctx, master, reverb);
   return ctx.startRendering();

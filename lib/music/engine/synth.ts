@@ -249,8 +249,8 @@ export function playNote(ctx: BaseAudioContext, dest: AudioNode, inst: Instrumen
       subtractive(ctx, dest, p, [{ type: "triangle" }, { type: "sawtooth", gain: 0.15 }, { type: "sine", ratio: 2, gain: 0.2 }], { a: 0.003, d: 0.6, s: 0.18, r: 0.25, cutoff: 1200, cutoffKey: 3, peak: 0.3 });
       break;
     case "epiano":
-      fmBell(ctx, dest, p, { ratio: 14, index: 40, decay: Math.min(p.dur + 0.8, 2), peak: 0.3 });
-      subtractive(ctx, dest, p, [{ type: "sine" }], { a: 0.004, d: 0.5, s: 0.3, r: 0.3, peak: 0.22 });
+      fmBell(ctx, dest, p, { ratio: 14, index: 14, decay: Math.min(p.dur + 0.6, 1.4), peak: 0.18 });
+      subtractive(ctx, dest, p, [{ type: "sine" }, { type: "sine", ratio: 2, gain: 0.18 }], { a: 0.004, d: 0.5, s: 0.3, r: 0.3, peak: 0.26 });
       break;
     case "organ":
       subtractive(
@@ -487,7 +487,7 @@ export function playDrum(ctx: BaseAudioContext, dest: AudioNode, drum: DrumName,
       hp.type = "highpass";
       hp.frequency.value = 7500;
       const g = ctx.createGain();
-      g.gain.setValueAtTime(0.3 * vel, time);
+      g.gain.setValueAtTime(0.2 * vel, time);
       g.gain.exponentialRampToValueAtTime(0.001, time + (open ? 0.35 : 0.045));
       n.connect(hp);
       hp.connect(g);

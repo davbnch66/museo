@@ -48,6 +48,13 @@ export interface ComposeOptions {
   customLyrics?: string | null;
 }
 
+/** Fold a pitch into a register by octaves. */
+function foldRange(midi: number, lo: number, hi: number): number {
+  while (midi < lo) midi += 12;
+  while (midi > hi) midi -= 12;
+  return midi;
+}
+
 export function composeSong(opts: ComposeOptions): Song {
   const seed = opts.seed ?? (hashString(opts.prompt) ^ (Date.now() & 0xffff)) >>> 0;
   const rng = makeRNG(seed);
@@ -68,7 +75,7 @@ export function composeSong(opts: ComposeOptions): Song {
     analysis.bpmHint ??
     Math.round(genre.bpm[0] + (genre.bpm[1] - genre.bpm[0]) * (0.3 + 0.7 * mood.energy * rng.next()));
   const stepsPerBar = genre.stepsPerBar ?? 16;
-  const rootMidi = rng.int(45, 56); // A2..G#3 region for harmony center
+  const rootMidi = rng.int(48, 59); // C3..B3 — harmony center
 
   // --- Structure ---
   const structName = rng.pick(genre.structures);
@@ -117,8 +124,8 @@ export function composeSong(opts: ComposeOptions): Song {
     const prog = progFor(sec.type);
     for (let b = 0; b < sec.bars; b++) {
       const degree = prog[b % prog.length];
-      const raw = diatonicChord(rootMidi, scale, degree, chordSize, 1);
-      chordAt.push(voiceLead(raw, rootMidi + 16));
+      const raw = diatonicChord(rootMidi, scale, degree, chordSize, 0);
+      chordAt.push(voiceLead(raw, 58));
     }
   }
   const barOf = (step: number) => Math.floor(step / stepsPerBar);
@@ -169,15 +176,16 @@ export function composeSong(opts: ComposeOptions): Song {
       if (chordInst) {
         addChordBar(chordNotes, rng, chordStyle, chord, barStart, stepsPerBar, e);
       }
-      // Pad
+      // Pad — same register as the chords, warm and quiet.
       if (usePad && padInst && (e <= 0.95 || sec.type === "chorus" || sec.type === "drop")) {
-        for (const p of chord.pitches) padNotes.push({ step: barStart, durSteps: stepsPerBar, midi: p + 12, vel: 0.5 });
+        for (const p of chord.pitches) padNotes.push({ step: barStart, durSteps: stepsPerBar, midi: p, vel: 0.45 });
       }
       // Drone
       if (droneInst) {
         if (b === 0) {
-          droneNotes.push({ step: barStart, durSteps: sec.bars * stepsPerBar, midi: rootMidi, vel: 0.6 });
-          droneNotes.push({ step: barStart, durSteps: sec.bars * stepsPerBar, midi: rootMidi + 7, vel: 0.4 });
+          const dr = foldRange(rootMidi, 41, 52);
+          droneNotes.push({ step: barStart, durSteps: sec.bars * stepsPerBar, midi: dr, vel: 0.6 });
+          droneNotes.push({ step: barStart, durSteps: sec.bars * stepsPerBar, midi: dr + 7, vel: 0.4 });
         }
       }
       // Arp
@@ -209,13 +217,13 @@ export function composeSong(opts: ComposeOptions): Song {
     }
   }
 
-  if (bassInst && bassNotes.length) tracks.push({ id: "bass", role: "bass", instrument: bassInst, notes: bassNotes, gain: 0.85, pan: 0 });
-  if (chordInst && chordNotes.length) tracks.push({ id: "chords", role: "chords", instrument: chordInst, notes: chordNotes, gain: 0.5, pan: -0.15 });
-  if (usePad && padInst && padNotes.length) tracks.push({ id: "pad", role: "pad", instrument: padInst, notes: padNotes, gain: 0.33, pan: 0.1 });
-  if (droneInst && droneNotes.length) tracks.push({ id: "drone", role: "drone", instrument: droneInst, notes: droneNotes, gain: 0.45, pan: 0 });
-  if (useArp && arpInst && arpNotes.length) tracks.push({ id: "arp", role: "arp", instrument: arpInst, notes: arpNotes, gain: 0.4, pan: 0.3 });
-  if (melodyNotes.length) tracks.push({ id: "melody", role: "melody", instrument: melodyInst, notes: melodyNotes, gain: 0.65, pan: 0.05 });
-  if (vocalNotes.length) tracks.push({ id: "vocal", role: "vocal", instrument: "leadSaw", notes: vocalNotes, gain: 0.9, pan: 0 });
+  if (bassInst && bassNotes.length) tracks.push({ id: "bass", role: "bass", instrument: bassInst, notes: bassNotes, gain: 0.8, pan: 0 });
+  if (chordInst && chordNotes.length) tracks.push({ id: "chords", role: "chords", instrument: chordInst, notes: chordNotes, gain: 0.42, pan: -0.15 });
+  if (usePad && padInst && padNotes.length) tracks.push({ id: "pad", role: "pad", instrument: padInst, notes: padNotes, gain: 0.3, pan: 0.1 });
+  if (droneInst && droneNotes.length) tracks.push({ id: "drone", role: "drone", instrument: droneInst, notes: droneNotes, gain: 0.4, pan: 0 });
+  if (useArp && arpInst && arpNotes.length) tracks.push({ id: "arp", role: "arp", instrument: arpInst, notes: arpNotes, gain: 0.32, pan: 0.3 });
+  if (melodyNotes.length) tracks.push({ id: "melody", role: "melody", instrument: melodyInst, notes: melodyNotes, gain: 0.55, pan: 0.05 });
+  if (vocalNotes.length) tracks.push({ id: "vocal", role: "vocal", instrument: "leadSaw", notes: vocalNotes, gain: 0.6, pan: 0 });
 
   const durationSec = totalSteps * stepDur + 3; // release tail
 
@@ -328,11 +336,13 @@ function addMelodySection(
       let degOffset = motif.contour[i];
       if (mutate && rng.chance(0.25)) degOffset += rng.pick([-1, 1]);
       const chordRootDeg = nearestDegreeIndex(root, scale, chord.rootMidi);
-      let midi = degreeToMidi(root, scale, chordRootDeg + degOffset, 2);
+      let midi = degreeToMidi(root, scale, chordRootDeg + degOffset, 1);
       // Snap strong beats to chord tones.
       if ((step - phraseStart) % (stepsPerBar / 2) === 0) {
         midi = snapToChordTone(midi, chord);
       }
+      // Keep the lead in a singable instrumental register.
+      midi = foldRange(midi, 62, 79);
       if (rng.chance(0.92)) {
         out.push({ step, durSteps: Math.max(1, dur - (rng.chance(0.3) ? 1 : 0)), midi, vel: velScale * (0.75 + 0.25 * rng.next()) });
       }
@@ -497,7 +507,7 @@ function addBassBar(
   energy: number,
   root: number
 ) {
-  const r = chord.rootMidi - 12;
+  const r = foldRange(chord.rootMidi, 36, 47);
   const fifth = r + 7;
   const vel = 0.7 + energy * 0.3;
   switch (style) {
@@ -512,8 +522,8 @@ function addBassBar(
     }
     case "walking": {
       const q = spb / 4;
-      const third = chord.pitches[1] - 12;
-      const approach = nextChord.rootMidi - 12 + rng.pick([-1, 1, -2, 2]);
+      const third = foldRange(chord.pitches[1], 38, 49);
+      const approach = foldRange(nextChord.rootMidi, 36, 47) + rng.pick([-1, 1, -2, 2]);
       [r, third, fifth, approach].forEach((m, i) =>
         out.push({ step: barStart + i * q, durSteps: q, midi: m, vel: vel * (0.8 + 0.2 * rng.next()) })
       );
@@ -553,7 +563,7 @@ function addBassBar(
 }
 
 function addArpBar(out: NoteEvent[], chord: Chord, barStart: number, spb: number, energy: number, rng: RNG) {
-  const pitches = [...chord.pitches.map((p) => p + 12), chord.pitches[0] + 24];
+  const pitches = [...chord.pitches.map((p) => foldRange(p + 12, 64, 80)), foldRange(chord.pitches[0] + 24, 70, 84)];
   const sixteenths = energy > 0.8;
   const stepLen = sixteenths ? 1 : 2;
   const count = spb / stepLen;

@@ -28,10 +28,15 @@ for (const prompt of prompts) {
   for (const t of song.tracks) {
     check(t.notes.length > 0, `piste ${t.id} non vide`);
     for (const n of t.notes) {
-      check(n.midi >= 16 && n.midi <= 110, `${t.id}: midi dans la plage (${n.midi})`);
+      check(n.midi >= 16 && n.midi <= 90, `${t.id}: midi dans la plage (${n.midi})`);
       check(n.step >= 0 && n.step < song.totalSteps, `${t.id}: step dans la grille`);
       check(n.durSteps > 0, `${t.id}: durée > 0`);
     }
+    // Registres par rôle : la basse reste grave, la mélodie reste chantable.
+    const ms = t.notes.map((n) => n.midi);
+    if (t.role === "bass") check(Math.max(...ms) <= 62, `${t.id}: basse trop aiguë (${Math.max(...ms)})`);
+    if (t.role === "melody") check(Math.max(...ms) <= 81 && Math.min(...ms) >= 58, `${t.id}: mélodie hors registre (${Math.min(...ms)}-${Math.max(...ms)})`);
+    if (t.role === "chords" || t.role === "pad") check(Math.max(...ms) <= 76, `${t.id}: ${t.role} trop aigu (${Math.max(...ms)})`);
   }
   if (song.voice) {
     const sylls = song.sections.flatMap((s) => s.lyricLines.flatMap((l) => l.syllables));
