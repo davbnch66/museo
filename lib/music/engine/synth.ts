@@ -121,7 +121,13 @@ function subtractive(
   amp.connect(dest);
 }
 
-/** Karplus-Strong pluck: noise burst into a feedback delay loop. */
+/**
+ * Karplus-Strong pluck, precomputed into an AudioBuffer (no feedback-loop
+ * nodes: Web Audio clamps cycles to 128 samples, which would detune any
+ * pluck above ~345 Hz). Buffers are cached per context.
+ */
+const pluckCache = new WeakMap<BaseAudioContext, Map<string, AudioBuffer>>();
+
 function pluck(
   ctx: BaseAudioContext,
   dest: AudioNode,
@@ -130,32 +136,54 @@ function pluck(
 ) {
   const { brightness = 4000, sustain = 0.96, peak = 0.5, bendDown = 0 } = opts;
   const t = p.time;
-  const period = 1 / p.freq;
-  const burst = ctx.createBufferSource();
-  burst.buffer = getNoiseBuffer(ctx);
-  burst.start(t, Math.random(), period * 2);
+  const sr = ctx.sampleRate;
+  const durSec = Math.min(p.dur + 1.2, 3);
 
-  const delay = ctx.createDelay(1);
-  delay.delayTime.setValueAtTime(period, t);
-  if (bendDown > 0) delay.delayTime.linearRampToValueAtTime(period * (1 + bendDown), t + 0.4);
-  const fb = ctx.createGain();
-  fb.gain.value = sustain;
-  const damp = ctx.createBiquadFilter();
-  damp.type = "lowpass";
-  damp.frequency.value = brightness;
+  let cache = pluckCache.get(ctx);
+  if (!cache) {
+    cache = new Map();
+    pluckCache.set(ctx, cache);
+  }
+  const key = `${p.freq.toFixed(1)}|${durSec.toFixed(2)}|${brightness}|${sustain}`;
+  let buf = cache.get(key);
+  if (!buf) {
+    const len = Math.max(64, Math.floor(sr * durSec));
+    buf = ctx.createBuffer(1, len, sr);
+    const out = buf.getChannelData(0);
+    const period = Math.max(2, Math.round(sr / p.freq));
+    const ring = new Float32Array(period);
+    // Noise burst, pre-filtered by a one-pole lowpass (pick brightness).
+    const a = Math.min(1, Math.max(0.05, brightness / 6000));
+    let lp = 0;
+    for (let i = 0; i < period; i++) {
+      lp += a * (Math.random() * 2 - 1 - lp);
+      ring[i] = lp;
+    }
+    // KS loop: averaging + loss, written straight into the buffer.
+    const fadeStart = len - Math.floor(sr * 0.04);
+    let idx = 0;
+    for (let i = 0; i < len; i++) {
+      const cur = ring[idx];
+      const nxt = ring[(idx + 1) % period];
+      ring[idx] = sustain * 0.5 * (cur + nxt);
+      out[i] = i >= fadeStart ? cur * (1 - (i - fadeStart) / (len - fadeStart)) : cur;
+      idx = (idx + 1) % period;
+    }
+    if (cache.size > 400) cache.clear();
+    cache.set(key, buf);
+  }
 
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  if (bendDown > 0) {
+    src.playbackRate.setValueAtTime(1, t);
+    src.playbackRate.linearRampToValueAtTime(1 - bendDown, t + 0.4);
+  }
   const out = ctx.createGain();
-  out.gain.setValueAtTime(peak * p.vel, t);
-  const end = t + Math.min(p.dur + 1.2, 3);
-  out.gain.setValueAtTime(peak * p.vel, end - 0.15);
-  out.gain.linearRampToValueAtTime(0.0001, end);
-
-  burst.connect(delay);
-  delay.connect(damp);
-  damp.connect(fb);
-  fb.connect(delay);
-  delay.connect(out);
+  out.gain.value = peak * p.vel;
+  src.connect(out);
   out.connect(dest);
+  src.start(t);
 }
 
 /** 2-operator FM for bells / metallophones / e-piano tines. */

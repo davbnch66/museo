@@ -3,7 +3,7 @@
 
 import { getGenre } from "../genres";
 import { midiToFreq } from "../theory";
-import type { Song, Track, TrackRole } from "../types";
+import type { Song, TrackRole } from "../types";
 import { makeReverbImpulse, playDrum, playNote } from "./synth";
 import { singSyllable } from "./vocals";
 
@@ -39,28 +39,15 @@ export interface RenderOptions {
   muted?: Set<string>;
 }
 
+/**
+ * Multi-pass rendering: each track (then drums, then vocals) is rendered in
+ * its own small OfflineAudioContext, the results are mixed in JS, and a final
+ * pass applies the master compressor. Keeping each graph small makes long,
+ * dense songs render reliably (a single graph can reach >10k nodes).
+ */
 export async function renderSong(song: Song, opts: RenderOptions = {}): Promise<AudioBuffer> {
   const sampleRate = opts.sampleRate ?? 44100;
-  const ctx = new OfflineAudioContext(2, Math.ceil(song.durationSec * sampleRate), sampleRate);
-
-  // Master chain: sum → compressor → soft gain.
-  const master = ctx.createGain();
-  master.gain.value = 0.9;
-  const comp = ctx.createDynamicsCompressor();
-  comp.threshold.value = -14;
-  comp.knee.value = 8;
-  comp.ratio.value = 4;
-  comp.attack.value = 0.004;
-  comp.release.value = 0.18;
-  master.connect(comp);
-  comp.connect(ctx.destination);
-
-  const reverb = ctx.createConvolver();
-  reverb.buffer = makeReverbImpulse(ctx, song.mood.energy < 0.3 ? 3.6 : 2.2, 2.8);
-  const reverbGain = ctx.createGain();
-  reverbGain.gain.value = 1;
-  reverb.connect(reverbGain);
-  reverbGain.connect(master);
+  const length = Math.ceil(song.durationSec * sampleRate);
 
   const include = (id: string) => {
     if (opts.muted?.has(id)) return false;
@@ -68,44 +55,93 @@ export async function renderSong(song: Song, opts: RenderOptions = {}): Promise<
     return opts.only === id;
   };
 
-  // Instrument tracks.
+  const stems: AudioBuffer[] = [];
   for (const track of song.tracks) {
     if (track.role === "vocal") continue; // rendered below from syllables
     if (!include(track.id)) continue;
-    const bus = makeTrackBus(ctx, master, reverb, track.gain, track.pan, REVERB_SEND[track.role]);
-    for (const n of track.notes) {
-      const t = timeOfStep(song, n.step) + 0.05;
-      const dur = Math.max(0.05, n.durSteps * stepDuration(song) * 0.95);
-      playNote(ctx, bus, track.instrument, { time: t, dur, freq: midiToFreq(n.midi), vel: n.vel });
-    }
-  }
-
-  // Drums.
-  if (song.drums.length && include("drums")) {
-    const bus = makeTrackBus(ctx, master, reverb, 0.9, 0, 0.12);
-    for (const d of song.drums) {
-      playDrum(ctx, bus, d.drum, timeOfStep(song, d.step) + 0.05, d.vel);
-    }
-  }
-
-  // Vocals.
-  if (song.voice && include("vocal")) {
-    const choir = getGenre(song.genreId).vocalStyle === "choir" || getGenre(song.genreId).vocalStyle === "chant";
-    const bus = makeTrackBus(ctx, master, reverb, 0.95, 0, REVERB_SEND.vocal);
-    let prevMidi: number | null = null;
-    for (const sec of song.sections) {
-      for (const line of sec.lyricLines) {
-        for (const syl of line.syllables) {
-          const t = timeOfStep(song, syl.step) + 0.05;
-          const dur = Math.max(0.08, syl.durSteps * stepDuration(song) * 0.92);
-          singSyllable(ctx, bus, syl, t, dur, song.voice, { choir, prevMidi });
-          prevMidi = syl.midi;
-        }
-        prevMidi = null; // breath between lines
+    stems.push(await renderUnit(song, length, sampleRate, (ctx, master, reverb) => {
+      const bus = makeTrackBus(ctx, master, reverb, track.gain, track.pan, REVERB_SEND[track.role]);
+      for (const n of track.notes) {
+        const t = timeOfStep(song, n.step) + 0.05;
+        const dur = Math.max(0.05, n.durSteps * stepDuration(song) * 0.95);
+        playNote(ctx, bus, track.instrument, { time: t, dur, freq: midiToFreq(n.midi), vel: n.vel });
       }
+    }));
+  }
+
+  if (song.drums.length && include("drums")) {
+    stems.push(await renderUnit(song, length, sampleRate, (ctx, master, reverb) => {
+      const bus = makeTrackBus(ctx, master, reverb, 0.9, 0, 0.12);
+      for (const d of song.drums) {
+        playDrum(ctx, bus, d.drum, timeOfStep(song, d.step) + 0.05, d.vel);
+      }
+    }));
+  }
+
+  if (song.voice && include("vocal")) {
+    const voice = song.voice;
+    const choir = getGenre(song.genreId).vocalStyle === "choir" || getGenre(song.genreId).vocalStyle === "chant";
+    stems.push(await renderUnit(song, length, sampleRate, (ctx, master, reverb) => {
+      const bus = makeTrackBus(ctx, master, reverb, 0.95, 0, REVERB_SEND.vocal);
+      let prevMidi: number | null = null;
+      for (const sec of song.sections) {
+        for (const line of sec.lyricLines) {
+          for (const syl of line.syllables) {
+            const t = timeOfStep(song, syl.step) + 0.05;
+            const dur = Math.max(0.08, syl.durSteps * stepDuration(song) * 0.92);
+            singSyllable(ctx, bus, syl, t, dur, voice, { choir, prevMidi });
+            prevMidi = syl.midi;
+          }
+          prevMidi = null; // breath between lines
+        }
+      }
+    }));
+  }
+
+  // Mix stems in JS.
+  const mixCtx = new OfflineAudioContext(2, length, sampleRate);
+  const mixed = mixCtx.createBuffer(2, length, sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const out = mixed.getChannelData(ch);
+    for (const stem of stems) {
+      const data = stem.getChannelData(Math.min(ch, stem.numberOfChannels - 1));
+      const n = Math.min(out.length, data.length);
+      for (let i = 0; i < n; i++) out[i] += data[i];
     }
   }
 
+  // Master pass: compressor + overall gain.
+  const src = mixCtx.createBufferSource();
+  src.buffer = mixed;
+  const master = mixCtx.createGain();
+  master.gain.value = 0.75;
+  const comp = mixCtx.createDynamicsCompressor();
+  comp.threshold.value = -14;
+  comp.knee.value = 8;
+  comp.ratio.value = 4;
+  comp.attack.value = 0.004;
+  comp.release.value = 0.18;
+  src.connect(master);
+  master.connect(comp);
+  comp.connect(mixCtx.destination);
+  src.start(0);
+  return mixCtx.startRendering();
+}
+
+async function renderUnit(
+  song: Song,
+  length: number,
+  sampleRate: number,
+  schedule: (ctx: OfflineAudioContext, master: AudioNode, reverb: AudioNode) => void
+): Promise<AudioBuffer> {
+  const ctx = new OfflineAudioContext(2, length, sampleRate);
+  const master = ctx.createGain();
+  master.gain.value = 1;
+  master.connect(ctx.destination);
+  const reverb = ctx.createConvolver();
+  reverb.buffer = makeReverbImpulse(ctx, song.mood.energy < 0.3 ? 3.6 : 2.2, 2.8);
+  reverb.connect(master);
+  schedule(ctx, master, reverb);
   return ctx.startRendering();
 }
 

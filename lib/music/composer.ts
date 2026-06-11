@@ -163,7 +163,7 @@ export function composeSong(opts: ComposeOptions): Song {
 
       // Bass
       if (bassInst && e >= 0.42) {
-        addBassBar(bassNotes, rng, bassStyle, chord, nextChord, barStart, stepsPerBar, e, rootMidi, scale);
+        addBassBar(bassNotes, rng, bassStyle, chord, nextChord, barStart, stepsPerBar, e, rootMidi);
       }
       // Chords
       if (chordInst) {
@@ -495,8 +495,7 @@ function addBassBar(
   barStart: number,
   spb: number,
   energy: number,
-  root: number,
-  scale: ScaleName
+  root: number
 ) {
   const r = chord.rootMidi - 12;
   const fifth = r + 7;

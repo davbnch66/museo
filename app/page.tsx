@@ -20,7 +20,9 @@ const EXAMPLES = [
 
 export default function StudioPage() {
   const [prompt, setPrompt] = useState("");
-  const [genreId, setGenreId] = useState<string>("");
+  const [genreId, setGenreId] = useState<string>(() =>
+    typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("style") ?? ""
+  );
   const [instrumental, setInstrumental] = useState(false);
   const [voiceId, setVoiceId] = useState("museo-default");
   const [voices, setVoices] = useState<StoredVoice[]>([]);
@@ -33,8 +35,6 @@ export default function StudioPage() {
   const [result, setResult] = useState<{ song: Song; buffer: AudioBuffer } | null>(null);
 
   useEffect(() => {
-    const style = new URLSearchParams(window.location.search).get("style");
-    if (style) setGenreId(style);
     void db.listVoices().then(setVoices);
     void fetch("/api/providers")
       .then((r) => r.json())
