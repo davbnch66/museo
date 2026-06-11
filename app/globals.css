@@ -1,0 +1,45 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0b0a10;
+  --foreground: #ece9f1;
+  --accent: #c084fc;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: #15131d;
+  --color-surface2: #1e1b29;
+  --color-edge: #2c2839;
+  --color-accent: #c084fc;
+  --color-accent2: #f0abfc;
+  --color-muted: #8b86a0;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+::selection {
+  background: #c084fc55;
+}
+
+.font-display {
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+@keyframes museo-pulse {
+  0%, 100% { opacity: 0.5; transform: scaleY(0.4); }
+  50% { opacity: 1; transform: scaleY(1); }
+}
+.eq-bar {
+  animation: museo-pulse 1s ease-in-out infinite;
+  transform-origin: bottom;
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
+}
